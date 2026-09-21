@@ -24,7 +24,7 @@ v1.0.0
 - New Memory-Save Mode is Introduced to save data directly from memory to a File.
 - More Bound Checks and Limits.
 
-# MZ CLI
+# MZ CLI 
 
 The original MZ archiver is a command-line application for creating and extracting `.mz` files.
 
