@@ -49,28 +49,39 @@
 
 #endif
 
-struct MZ_AFI {
-    uint64_t filename_len;
-    char *filename;
-    uint64_t file_size;
+struct MZ_CONTENT {
+	MZ_ARCHIVE *owner;
+    uint64_t dataname_len;
+    char *dataname;
+    uint64_t data_size;
     uint64_t data_offset;
 };
 
 struct MZ_ARCHIVE {
 	FILE *fp;
     uint64_t format_version;
-    uint64_t file_count;
+    uint64_t data_count;
     uint64_t creation_time;
 	uint64_t archive_size;
-    MZ_AFI  *files;
+    MZ_CONTENT  *data;
 };
 
-struct MZ_BUILD {
+struct MZ_FILESAVE {
 	char header[2];
     uint64_t format_version;
     uint64_t file_count;
     uint64_t creation_time;
     char  **files;
+};
+
+struct MZ_MEMSAVE {
+	char header[2];
+	uint64_t format_version;
+	uint64_t data_count;
+	uint64_t creation_time;
+	uint64_t *data_sizes;
+	char **data_names;
+	void **data;
 };
 
 // Using little endian format to write values as (uint64_t) into a file.
@@ -184,53 +195,58 @@ MZ_ARCHIVE *mz_archive_open(const char *file)
 	if (archive->format_version != LIBMZ_FORMAT_VERSION)
 		goto error;
 
-    if (mz_fread_u64(fp, &archive->file_count) != 0)
+    if (mz_fread_u64(fp, &archive->data_count) != 0)
 		goto error;
-
-	if (archive->file_count > 0) {
-		archive->files = calloc(archive->file_count, sizeof(MZ_AFI));
-		if (!archive->files)
+	
+	if (archive->data_count >= LIBMZ_MAX_DATA_COUNT)
+		goto error;
+	
+	if (archive->data_count > 0) {
+		archive->data = calloc(archive->data_count, sizeof(MZ_CONTENT));
+		if (!archive->data)
 			goto error;
 	} else {
-		archive->files = NULL;
+		archive->data = NULL;
 	}
 
-    for (uint64_t i = 0; i < archive->file_count; i++) {
+    for (uint64_t i = 0; i < archive->data_count; i++) {
 
-        MZ_AFI *fi = &archive->files[i];
+        MZ_CONTENT *content = &archive->data[i];
 
-        if (mz_fread_u64(fp, &fi->filename_len) != 0)
+        if (mz_fread_u64(fp, &content->dataname_len) != 0)
             goto error;
 
-		if (fi->filename_len == UINT64_MAX)
+		if (content->dataname_len == UINT64_MAX || content->dataname_len >= LIBMZ_MAX_DATANAME_LENGTH)
 			goto error;
 		
-        fi->filename = malloc(fi->filename_len + 1);
-        if (!fi->filename)
+        content->dataname = malloc(content->dataname_len + 1);
+        if (!content->dataname)
             goto error;
 		
-        if (fread(fi->filename, 1, fi->filename_len, fp) != fi->filename_len)
+        if (fread(content->dataname, 1, content->dataname_len, fp) != content->dataname_len)
             goto error;
 
-        fi->filename[fi->filename_len] = '\0';
+        content->dataname[content->dataname_len] = '\0';
 
-        if (mz_fread_u64(fp, &fi->file_size) != 0)
+        if (mz_fread_u64(fp, &content->data_size) != 0)
             goto error;
 
         int64_t pos = mz_ftell(fp);
         if (pos < 0)
             goto error;
 		
-		if ((uint64_t)fi->data_offset == UINT64_MAX)
+		content->data_offset = (uint64_t)pos;
+		
+		if ((uint64_t)content->data_offset == UINT64_MAX)
+			goto error;
+
+		if (content->data_size == UINT64_MAX)
 			goto error;
 		
-        fi->data_offset = (uint64_t)pos;
-
-        if (mz_fseek(fp, (int64_t)fi->file_size, SEEK_CUR) != 0)
+        if (mz_fseek(fp, (int64_t)content->data_size, SEEK_CUR) != 0)
             goto error;
 		
-		if (fi->file_size == UINT64_MAX)
-			goto error;
+		content->owner = archive;
     }
 	
 	if (mz_fread_u64(fp, &archive->creation_time) != 0)
@@ -243,11 +259,11 @@ MZ_ARCHIVE *mz_archive_open(const char *file)
 error:
 
     if (archive) {
-        if (archive->files) {
-            for (uint64_t i = 0; i < archive->file_count; i++)
-                free(archive->files[i].filename);
+        if (archive->data) {
+            for (uint64_t i = 0; i < archive->data_count; i++)
+                free(archive->data[i].dataname);
 
-            free(archive->files);
+            free(archive->data);
         }
 
         if (archive->fp)
@@ -267,20 +283,20 @@ void mz_archive_close(MZ_ARCHIVE *mz)
     if (mz->fp)
         fclose(mz->fp);
 
-    if (mz->files) {
-        for (uint64_t i = 0; i < mz->file_count; i++) {
-            free(mz->files[i].filename);
+    if (mz->data) {
+        for (uint64_t i = 0; i < mz->data_count; i++) {
+            free(mz->data[i].dataname);
         }
 
-        free(mz->files);
+        free(mz->data);
     }
 
     free(mz);
 }
 
-uint64_t mz_archive_file_count(const MZ_ARCHIVE *mz)
+uint64_t mz_archive_data_count(const MZ_ARCHIVE *mz)
 {
-    return mz ? mz->file_count : UINT64_MAX;
+    return mz ? mz->data_count : UINT64_MAX;
 }
 
 uint64_t mz_archive_format_version(const MZ_ARCHIVE *mz)
@@ -298,61 +314,64 @@ uint64_t mz_archive_archive_size(const MZ_ARCHIVE *mz)
     return mz ? mz->archive_size : UINT64_MAX;
 }
 
-uint64_t mz_archive_filename_len_of(const MZ_AFI *file)
+uint64_t mz_archive_dataname_len_of(const MZ_CONTENT *content)
 {
-    if (!file)
+    if (!content)
         return UINT64_MAX;
 
-    return file->filename_len;
+    return content->dataname_len;
 }
 
-const char *mz_archive_filename_of(const MZ_AFI *file)
+const char *mz_archive_dataname_of(const MZ_CONTENT *content)
 {
-    if (!file)
+    if (!content)
         return NULL;
 
-    return file->filename;
+    return content->dataname;
 }
 
-uint64_t mz_archive_file_size_of(const MZ_AFI *file)
+uint64_t mz_archive_content_size_of(const MZ_CONTENT *content)
 {
-    if (!file)
+    if (!content)
         return UINT64_MAX;
 
-    return file->file_size;
+    return content->data_size;
 }
 
-uint64_t mz_archive_data_offset_of(const MZ_AFI *file)
+uint64_t mz_archive_data_offset_of(const MZ_CONTENT *content)
 {
-    if (!file)
+    if (!content)
         return UINT64_MAX;
 
-    return file->data_offset;
+    return content->data_offset;
 }
 
-const MZ_AFI *mz_archive_file_by_name(const MZ_ARCHIVE *mz, const char *filename)
+const MZ_CONTENT *mz_archive_content_by_name(const MZ_ARCHIVE *mz, const char *dataname)
 {
-    if (!mz || !filename)
+    if (!mz || !dataname)
         return NULL;
 
-    for (uint64_t i = 0; i < mz->file_count; ++i)
-        if (strcmp(mz->files[i].filename, filename) == 0)
-            return &mz->files[i];
+    for (uint64_t i = 0; i < mz->data_count; ++i)
+        if (strcmp(mz->data[i].dataname, dataname) == 0)
+            return &mz->data[i];
 
     return NULL;
 }
 
-const MZ_AFI *mz_archive_file_by_index(const MZ_ARCHIVE *mz, uint64_t index)
+const MZ_CONTENT *mz_archive_content_by_index(const MZ_ARCHIVE *mz, uint64_t index)
 {
-    if (!mz || index >= mz->file_count)
+    if (!mz || index >= mz->data_count)
         return NULL;
 
-    return &mz->files[index];
+    return &mz->data[index];
 }
 
-int mz_archive_read_file(const MZ_ARCHIVE *mz, const MZ_AFI *file, void *buffer, uint64_t size, uint64_t offset)
+int mz_archive_read_content(const MZ_ARCHIVE *mz, const MZ_CONTENT *content, void *buffer, uint64_t size, uint64_t offset)
 {
-	if(!mz || !file)
+	if(!mz || !content)
+		return -1;
+	
+	if (content->owner != mz)
 		return -1;
 	
 	FILE *stream = mz->fp;
@@ -361,10 +380,10 @@ int mz_archive_read_file(const MZ_ARCHIVE *mz, const MZ_AFI *file, void *buffer,
 	if (!buffer)
 		return -1;
 
-	if (offset > file->file_size)
+	if (offset > content->data_size)
 		return -1;
 
-	if (size > file->file_size - offset)
+	if (size > content->data_size - offset)
 		return -1;
 	
 	int64_t cur_offset = mz_ftell(stream);
@@ -372,7 +391,13 @@ int mz_archive_read_file(const MZ_ARCHIVE *mz, const MZ_AFI *file, void *buffer,
 	if (cur_offset < 0)
 		return -1;
 	
-	if(mz_fseek(stream, file->data_offset + offset, SEEK_SET) != 0){
+	if (offset > content->data_size)
+		return -1;
+
+	if (size > content->data_size - offset)
+		return -1;
+	
+	if(mz_fseek(stream, content->data_offset + offset, SEEK_SET) != 0){
 		mz_fseek(stream, cur_offset, SEEK_SET);
 		return -1;
 	}
@@ -385,9 +410,11 @@ int mz_archive_read_file(const MZ_ARCHIVE *mz, const MZ_AFI *file, void *buffer,
 	return 0;
 }
 
-MZ_BUILD *mz_build_open(uint64_t format_version)
+MZ_FILESAVE *mz_filesave_open(uint64_t format_version)
 {
-	MZ_BUILD *mz = calloc(1, sizeof(*mz));
+	if (format_version != LIBMZ_FORMAT_VERSION) return NULL;
+
+	MZ_FILESAVE *mz = calloc(1, sizeof(*mz));
 	if(!mz) return NULL;
 	
 	mz->header[0] = 'M';
@@ -400,17 +427,18 @@ MZ_BUILD *mz_build_open(uint64_t format_version)
 	return mz;
 }
 
-int mz_build_add_file(MZ_BUILD *mz, const char *filename)
+int mz_filesave_add_file(MZ_FILESAVE *mz, const char *filename)
 {
 	if(!mz || !filename) return -1;
+	
+	uint64_t filename_len = strlen(filename);
+	if (filename_len >= LIBMZ_MAX_DATANAME_LENGTH) return -1;
 	
 	char **new_files = realloc(mz->files, sizeof(char *) * (mz->file_count + 1));
 	if(!new_files) return -1;
 	
 	mz->files = new_files;
 
-	uint64_t filename_len = strlen(filename);
-	if (filename_len > 4096) return -1;
 	mz->files[mz->file_count] = malloc(filename_len + 1);
 	if(!mz->files[mz->file_count]){
 		return -1;
@@ -431,7 +459,7 @@ int mz_build_add_file(MZ_BUILD *mz, const char *filename)
 	return 0;
 }
 
-int mz_build_write(MZ_BUILD *mz, const char *archive)
+int mz_filesave_write(MZ_FILESAVE *mz, const char *archive)
 {
 	if (!mz || !archive ) return -1;
 	
@@ -518,7 +546,7 @@ error:
 	return -1;
 }
 
-void mz_build_close(MZ_BUILD *mz)
+void mz_filesave_close(MZ_FILESAVE *mz)
 {
     if (!mz)
         return;
@@ -527,5 +555,144 @@ void mz_build_close(MZ_BUILD *mz)
         free(mz->files[i]);
 
     free(mz->files);
+    free(mz);
+}
+
+MZ_MEMSAVE *mz_memsave_open(uint64_t format_version)
+{
+	if (format_version != LIBMZ_FORMAT_VERSION) return NULL;
+	
+	MZ_MEMSAVE *mz = calloc(1, sizeof(*mz));
+	if(!mz) return NULL;
+	
+	mz->header[0] = 'M';
+	mz->header[1] = 'Z';
+	
+	mz->format_version = format_version;
+	mz->data_count = 0;
+	mz->creation_time = (uint64_t)time(NULL);
+	mz->data_sizes = NULL;
+	mz->data_names = NULL;
+	mz->data = NULL;
+	return mz;
+}
+
+int mz_memsave_add_data(MZ_MEMSAVE *mz, const char *data_name, uint64_t data_size, const void *data)
+{
+	if(!mz || !data) return -1;
+	if(data_size == 0 || data_size >= LIBMZ_MAX_DATA_LENGTH) return -1;
+	if(!data_name) return -1;
+	if(mz->data_count >= LIBMZ_MAX_DATA_COUNT) return -1;
+	if(strlen(data_name) == 0 || strlen(data_name) >= LIBMZ_MAX_DATANAME_LENGTH) return -1;
+	
+	uint64_t *new_data_sizes = realloc(mz->data_sizes, sizeof(uint64_t) * (mz->data_count + 1));
+	if(!new_data_sizes) return -1;
+	
+	mz->data_sizes = new_data_sizes;
+	
+	char **new_data_names = realloc(mz->data_names, sizeof(char *) * (mz->data_count + 1));
+	if(!new_data_names) return -1;
+	
+	mz->data_names = new_data_names;
+	
+	void **new_data = realloc(mz->data, sizeof(void *) * (mz->data_count + 1));
+	if(!new_data) return -1;
+	
+	mz->data = new_data;
+
+	mz->data[mz->data_count] = malloc(data_size);
+	if(!mz->data[mz->data_count]){
+		return -1;
+	}
+	
+	mz->data_names[mz->data_count] = malloc(strlen(data_name) + 1);
+	if(!mz->data_names[mz->data_count]){
+		return -1;
+	}
+	
+	memcpy(mz->data[mz->data_count], data, data_size);
+	mz->data_sizes[mz->data_count] = data_size;
+	strcpy(mz->data_names[mz->data_count], data_name);
+	
+	mz->creation_time = (uint64_t)time(NULL);
+	mz->data_count++;
+	
+	return 0;
+}
+
+int mz_memsave_write(MZ_MEMSAVE *mz, const char *archive)
+{
+	if (!mz || !archive ) return -1;
+		
+	FILE *out = fopen(archive, "wb");
+	if(!out) return -1;
+	
+	if(fwrite(mz->header, sizeof(char), 2, out) != 2){
+		goto error;
+	}
+	if(mz_fwrite_u64(out, mz->format_version) != 0){
+		goto error;
+	}
+	if(mz_fwrite_u64(out, mz->data_count) != 0){
+		goto error;
+	}
+
+	for(uint64_t i = 0; i < mz->data_count; i++){
+
+		char *data_name = mz->data_names[i];
+		if(!data_name){
+			goto error;
+		}
+
+		uint64_t datanamelength = strlen(data_name);
+
+		if(mz_fwrite_u64(out, datanamelength) != 0){
+			goto error;
+		}
+
+		if(fwrite(data_name, sizeof(char), datanamelength, out) != datanamelength){
+			goto error;
+		}
+
+		uint64_t datasize = mz->data_sizes[i];
+
+		if(mz_fwrite_u64(out, datasize) != 0){
+			goto error;
+		}
+
+		if (fwrite(mz->data[i], 1, datasize, out) != datasize) {
+			goto error;
+		}
+	}
+	
+	mz->creation_time = (uint64_t)time(NULL);
+	if(mz_fwrite_u64(out, mz->creation_time) != 0){
+		goto error;
+	}
+	
+	fclose(out);
+	return 0;
+
+error:
+    if(out){
+        fclose(out);
+        remove(archive);
+    }
+	return -1;
+}
+
+void mz_memsave_close(MZ_MEMSAVE *mz)
+{
+    if (!mz)
+        return;
+
+    for (uint64_t i = 0; i < mz->data_count; i++) {
+		free(mz->data_names[i]);
+		free(mz->data[i]);
+	}
+
+    free(mz->data_sizes);
+    free(mz->data_names);
+    free(mz->data);
     free(mz);
 }

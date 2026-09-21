@@ -26,7 +26,7 @@
 /*
     Thread Safety
 
-    MZ_ARCHIVE and MZ_BUILD objects are NOT thread-safe.
+    MZ_ARCHIVE , MZ_FILESAVE and MZ_MEMSAVE objects are NOT thread-safe.
     Do not access the same object concurrently from multiple threads.
     If concurrent access is required, open the archive separately
     in each thread.
@@ -40,10 +40,13 @@
 #define LIBMZ_API // For future shared - libraries
 
 #define LIBMZ_BUFFER (1024 * 1024)
+#define LIBMZ_MAX_DATANAME_LENGTH 4096 // 4 KB
+#define LIBMZ_MAX_DATA_LENGTH 6144 // Only for MZ_MEMSAVE mode as 6 KB
+#define LIBMZ_MAX_DATA_COUNT 2000  // Only for MZ_MEMSAVE mode
 
-#define LIBMZ_VERSION "0.1.0"
-#define LIBMZ_VERSION_MAJOR 0
-#define LIBMZ_VERSION_MINOR 1
+#define LIBMZ_VERSION "1.0.0"
+#define LIBMZ_VERSION_MAJOR 1
+#define LIBMZ_VERSION_MINOR 0
 #define LIBMZ_VERSION_PATCH 0
 
 #define LIBMZ_FORMAT_VERSION 0
@@ -55,11 +58,14 @@ extern "C" {
 // Opaque struct for holding Archiving data info in memory
 typedef struct MZ_ARCHIVE MZ_ARCHIVE;
 
-// Opaque struct for holding file data present inside an Archive
-typedef struct MZ_AFI MZ_AFI;
+// Opaque struct for holding content data present inside an Archive
+typedef struct MZ_CONTENT MZ_CONTENT;
 
 // Opaque struct for building an archive in memory
-typedef struct MZ_BUILD MZ_BUILD;
+typedef struct MZ_FILESAVE MZ_FILESAVE;
+
+// Opaque struct for building an archive for data [ not file ] in memory
+typedef struct MZ_MEMSAVE MZ_MEMSAVE;
 
 /**
 	Function to load a valid MZ file
@@ -70,7 +76,7 @@ typedef struct MZ_BUILD MZ_BUILD;
 		On success :- pointer to the loaded MZ_ARCHIVE struct
 		On failure :- NULL
 **/
-LIBMZ_API MZ_ARCHIVE *mz_archive_open(const char *filename);
+LIBMZ_API MZ_ARCHIVE *mz_archive_open(const char *file);
 
 /**
 	Function to close a previously opened MZ archive
@@ -81,16 +87,16 @@ LIBMZ_API MZ_ARCHIVE *mz_archive_open(const char *filename);
 LIBMZ_API void mz_archive_close(MZ_ARCHIVE *mz);
 
 /**
-	Function to get number of files archived in a Valid MZ file
+	Function to get number of data archived in a Valid MZ file
 	
 	@Param :
 		mz : MZ_ARCHIVE struct
 	
 	@Returns :
-		On success :- number of files
+		On success :- number of archived content entries
 		On failure :- UINT64_MAX
 **/
-LIBMZ_API uint64_t mz_archive_file_count(const MZ_ARCHIVE *mz);
+LIBMZ_API uint64_t mz_archive_data_count(const MZ_ARCHIVE *mz);
 
 /**
 	Function to get archive format version
@@ -129,140 +135,189 @@ LIBMZ_API uint64_t mz_archive_creation_time(const MZ_ARCHIVE *mz);
 LIBMZ_API uint64_t mz_archive_archive_size(const MZ_ARCHIVE *mz);
 
 /**
-	Function to get the filename length of a loaded file
+	Function to get the dataname length of a loaded file
  	
 	@Param :
-		file : MZ_AFI struct
+		content : MZ_CONTENT struct
 		
 	@Returns :
-		On success :- file name length
+		On success :- data name length
 		On failure :- UINT64_MAX
 **/
-LIBMZ_API uint64_t mz_archive_filename_len_of(const MZ_AFI *file);
+LIBMZ_API uint64_t mz_archive_dataname_len_of(const MZ_CONTENT *content);
 
 /**
-	Function to get the filename of a loaded file
+	Function to get the dataname of a loaded file
  
 	@Param :
-		file : MZ_AFI struct
+		content : MZ_CONTENT struct
 		
 	@Returns :
-		On success :- file name [ Do not free the filename , as it is a part of mz struct ]
+		On success :- data name [ Do not free the dataname , as it is a part of mz struct ]
 		On failure :- NULL
 **/
-LIBMZ_API const char *mz_archive_filename_of(const MZ_AFI *file);
+LIBMZ_API const char *mz_archive_dataname_of(const MZ_CONTENT *content);
 
 /**
-	Function to get the filesize of a loaded file
+	Function to get the datasize of a loaded archived content
  
 	@Param :
-		file : MZ_AFI struct
+		content : MZ_CONTENT struct
 		
 	@Returns :
-		On success :- filesize
+		On success :- datasize
 		On failure :- UINT64_MAX
 **/
-LIBMZ_API uint64_t mz_archive_file_size_of(const MZ_AFI *file);
+LIBMZ_API uint64_t mz_archive_content_size_of(const MZ_CONTENT *content);
 
 /**
-	Function to get the filecontent offset of a loaded file in the archive
+	Function to get the datacontent offset of a loaded file in the archive
  
 	@Param :
-		file : MZ_AFI struct
+		content : MZ_CONTENT struct
 		
 	@Returns :
 		On success :- offset
 		On failure :- UINT64_MAX
 **/
-LIBMZ_API uint64_t mz_archive_data_offset_of(const MZ_AFI *file);
+LIBMZ_API uint64_t mz_archive_data_offset_of(const MZ_CONTENT *content);
 
 /**
-	Function to get file from a loaded archive using its name
+	Function to get content struct from a loaded archive using its name
  
 	@Param :
 		mz       : MZ_ARCHIVE struct
-		filename : file name to search for
+		dataname : data name to search for
 		
 	@Returns :
-		On success :- pointer to file information [ The pointer remains valid until mz_close() is called.]
+		On success :- pointer to content information [ The pointer remains valid until mz_close() is called.]
 		On failure :- NULL
 **/
-LIBMZ_API const MZ_AFI *mz_archive_file_by_name(const MZ_ARCHIVE *mz, const char *filename);
+LIBMZ_API const MZ_CONTENT *mz_archive_content_by_name(const MZ_ARCHIVE *mz, const char *dataname);
 
 /**
-	Function to get file from a loaded archive using its index
+	Function to get content struct from a loaded archive using its index
  
 	@Param :
 		mz    : MZ_ARCHIVE struct
-		index : zero-based file index
+		index : zero-based content index
 		
 	@Returns :
-		On success :- pointer to file information [ The pointer remains valid until mz_close() is called.]
+		On success :- pointer to content struct [ The pointer remains valid until mz_close() is called.]
 		On failure :- NULL
 **/
-LIBMZ_API const MZ_AFI *mz_archive_file_by_index(const MZ_ARCHIVE *mz, uint64_t index);
+LIBMZ_API const MZ_CONTENT *mz_archive_content_by_index(const MZ_ARCHIVE *mz, uint64_t index);
 
 /**
-	Function to read the data of a file from the archive
+	Function to read the content of a dataname from the archive
 	
 	@Param :
-		mz     : loaded archive
-		file   : archive-owned file descriptor
-		buffer : destination buffer
-		size   : number of bytes to read
-		offset : byte offset inside the archived file (0 <= offset <= file size)
+		mz      : loaded archive
+		content : archive-owned content descriptor
+		buffer  : destination buffer
+		size    : number of bytes to read
+		offset  : byte offset inside the archived file (0 <= offset <= data size)
 
 	@Returns :
 		On success :- 0
 		On failure :- -1
 **/
-LIBMZ_API int mz_archive_read_file(const MZ_ARCHIVE *mz, const MZ_AFI *file, void *buffer, uint64_t size, uint64_t offset);
+LIBMZ_API int mz_archive_read_content(const MZ_ARCHIVE *mz, const MZ_CONTENT *content, void *buffer, uint64_t size, uint64_t offset);
 
 /**
-	Function to initialize a virtual archive
+	Function to initialize a virtual archive for file data storage
 
 	@Param :
 		format_version : archive format version
 
 	@Returns :
-		On success :- pointer to the initialized MZ_BUILD struct
+		On success :- pointer to the initialized MZ_FILESAVE struct
 		On failure :- NULL
 **/
-LIBMZ_API MZ_BUILD *mz_build_open(uint64_t format_version);
+LIBMZ_API MZ_FILESAVE *mz_filesave_open(uint64_t format_version);
 
 /**
 	Function to add a file to a virtual archive
 
 	@Param :
-		mz       : MZ_BUILD struct
+		mz       : MZ_FILESAVE struct
 		filename : path of the file to be added to the archive
 
 	@Returns :
 		On success :- 0
 		On failure :- -1
 **/
-LIBMZ_API int mz_build_add_file(MZ_BUILD *mz, const char *filename);
+LIBMZ_API int mz_filesave_add_file(MZ_FILESAVE *mz, const char *filename);
 
 /**
 	Function to write the virtual archive into disk
 
 	@Param :
-		mz      : MZ_BUILD struct
+		mz      : MZ_FILESAVE struct
 		archive : output archive filename
 
 	@Returns :
 		On success :- 0
 		On failure :- -1
 **/
-LIBMZ_API int mz_build_write(MZ_BUILD *mz, const char *archive);
+LIBMZ_API int mz_filesave_write(MZ_FILESAVE *mz, const char *archive);
 
 /**
 	Function to destroy a virtual archive
 
 	@Param :
-		mz : MZ_BUILD struct
+		mz : MZ_FILESAVE struct
 **/
-LIBMZ_API void mz_build_close(MZ_BUILD *mz);
+LIBMZ_API void mz_filesave_close(MZ_FILESAVE *mz);
+
+
+/**
+	Function to initialize a virtual archive for memory data storage
+
+	@Param :
+		format_version : archive format version
+
+	@Returns :
+		On success :- pointer to the initialized MZ_MEMSAVE struct
+		On failure :- NULL
+**/
+LIBMZ_API MZ_MEMSAVE *mz_memsave_open(uint64_t format_version);
+
+/**
+	Function to add data to the virtual archive
+
+	@Param :
+		mz        : MZ_MEMSAVE struct
+		data_name : name of the content data to be stored
+		data_size : size of the content data
+		data      : content data
+
+	@Returns :
+		On success :- 0
+		On failure :- -1
+**/
+LIBMZ_API int mz_memsave_add_data(MZ_MEMSAVE *mz, const char *data_name, uint64_t data_size, const void *data);
+
+/**
+	Function to write the virtual archive into disk
+
+	@Param :
+		mz      : MZ_MEMSAVE struct
+		archive : output archive filename
+
+	@Returns :
+		On success :- 0
+		On failure :- -1
+**/
+LIBMZ_API int mz_memsave_write(MZ_MEMSAVE *mz, const char *archive);
+
+/**
+	Function to destroy the MZ_MEMSAVE virtual archive
+
+	@Param :
+		mz : MZ_MEMSAVE struct
+**/
+LIBMZ_API void mz_memsave_close(MZ_MEMSAVE *mz);
 
 #ifdef __cplusplus
 }

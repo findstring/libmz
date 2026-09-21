@@ -12,11 +12,17 @@ The library allows programs to:
 - Search files by name
 - Access file sizes and data offsets
 - Build custom tools around the MZ file format
-- Build virtual archives
+- Build virtual archives for writing data from a file
+- Build virtual archives for writing data from memory
 - Write virtual archives into disk
 
 # Version
-v0.1.0
+v1.0.0
+
+# Changelog [0.1.0 -> 1.0.0]
+- Fully Changed API with more better and convinient function names.
+- New Memory-Save Mode is Introduced to save data directly from memory to a File.
+- More Bound Checks and Limits.
 
 # MZ CLI
 
@@ -53,6 +59,7 @@ The purpose of this library is to allow developers to use the MZ archive format 
 
 Currently supported:
 
+### For File Save Mode
 - Open `.mz` archive files
 - Validate MZ archive headers and reject archives with an unsupported format version or a malformed file table
 - Read archive format version
@@ -64,15 +71,70 @@ Currently supported:
 - Get file data offsets
 - Search files by filename
 - Access files by index
-- Build new archives in memory and write them to disk
+- Build new archives in memory and write them to disk **This mode for writing data from reading a file**
 - C and C++ compatibility
 - Stores all multi-byte integers in a fixed little-endian layout, so the same archive reads correctly on little- and big-endian machines
 
+### For Memory Save Mode
+- Open `.*` archive files
+- Validate MZ archive headers and reject archives with an unsupported format version or a malformed file table
+- Read archive format version
+- Read archive data count
+- Read archive creation time
+- Read data content
+- Access stored datanames
+- Get data sizes
+- Get data data offsets
+- Search content by dataname
+- Access content by index
+- Build new archives in memory and write them to disk **This mode for writing data directly from memory**
+- C and C++ compatibility
+- Stores all multi-byte integers in a fixed little-endian layout, so the same archive reads correctly on little- and big-endian machines
 
 # Example Usage
 
-## Reading an archive
+## Writing and Reading an archive in File Save Mode
 
+### Writing Files
+
+```c
+#include "libmz.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void)
+{
+    MZ_FILESAVE *save = mz_filesave_open(0 /* format version */);
+
+    if (save == NULL) {
+        fprintf(stderr, "Failed to create archive builder.\n");
+        return EXIT_FAILURE;
+    }
+
+    if (mz_filesave_add_file(save, "notes.txt") != 0 ||
+        mz_filesave_add_file(save, "photo.png") != 0) {
+
+        fprintf(stderr, "Failed to add file to archive.\n");
+        mz_filesave_close(save);
+        return EXIT_FAILURE;
+    }
+
+    if (mz_filesave_write(save, "example.mz") != 0) {
+        fprintf(stderr, "Failed to write archive.\n");
+        mz_filesave_close(save);
+        return EXIT_FAILURE;
+    }
+
+    mz_filesave_close(save);
+
+    printf("Wrote example.mz\n");
+
+    return EXIT_SUCCESS;
+}
+```
+
+### Reading File
 ```c
 #include "libmz.h"
 
@@ -84,40 +146,53 @@ Currently supported:
 int main(void)
 {
     MZ_ARCHIVE *archive = mz_archive_open("example.mz");
-    if (!archive) {
+
+    if (archive == NULL) {
         fprintf(stderr, "Failed to open archive.\n");
         return EXIT_FAILURE;
     }
 
     printf("Archive Information\n");
     printf("-------------------\n");
-    printf("Files: %" PRIu64 "\n", mz_archive_file_count(archive));
-    printf("Format Version: %" PRIu64 "\n", mz_archive_format_version(archive));
-    printf("Created: %" PRIu64 "\n\n", mz_archive_creation_time(archive));
+    printf("Data: %" PRIu64 "\n", mz_archive_data_count(archive));
+    printf("Format Version: %" PRIu64 "\n",
+           mz_archive_format_version(archive));
+    printf("Created: %" PRIu64 "\n\n",
+           mz_archive_creation_time(archive));
 
-    const MZ_AFI *file = mz_archive_file_by_index(archive, 0);
-    if (!file) {
-        fprintf(stderr, "Archive contains no files.\n");
+    const MZ_CONTENT *content =
+        mz_archive_content_by_index(archive, 0);
+
+    if (content == NULL) {
+        fprintf(stderr, "Archive contains no content.\n");
         mz_archive_close(archive);
         return EXIT_FAILURE;
     }
 
-    printf("First File\n");
-    printf("----------\n");
-    printf("Name: %s\n", mz_archive_filename_of(file));
-    printf("Size: %" PRIu64 " bytes\n", mz_archive_file_size_of(file));
+    printf("First Content\n");
+    printf("-------------\n");
+    printf("Name: %s\n", mz_archive_dataname_of(content));
 
-    uint64_t size = mz_archive_file_size_of(file);
+    uint64_t size = mz_archive_content_size_of(content);
+
+    printf("Size: %" PRIu64 " bytes\n", size);
+
     void *buffer = malloc((size_t)size);
 
-    if (!buffer) {
+    if (buffer == NULL && size != 0) {
         fprintf(stderr, "Failed to allocate memory.\n");
         mz_archive_close(archive);
         return EXIT_FAILURE;
     }
 
-    if (mz_archive_read_file(archive, file, buffer, size, 0) != 0) {
-        fprintf(stderr, "Failed to read file contents.\n");
+    if (mz_archive_read_content(
+            archive,
+            content,
+            buffer,
+            size,
+            0) != 0) {
+
+        fprintf(stderr, "Failed to read content.\n");
         free(buffer);
         mz_archive_close(archive);
         return EXIT_FAILURE;
@@ -132,42 +207,165 @@ int main(void)
 }
 ```
 
-## Building an archive
+## Writing and Reading an archive in Memory Save Mode
 
+### Writing Game Data
 ```c
 #include "libmz.h"
 
+#include <inttypes.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int main(void)
 {
-    MZ_BUILD *build = mz_build_open(0 /* format version */);
-    if (!build) {
-        fprintf(stderr, "Failed to create archive builder.\n");
+    MZ_MEMSAVE *save = mz_memsave_open(0 /* format version */);
+
+    if (save == NULL) {
+        fprintf(stderr, "Failed to create memory archive.\n");
         return EXIT_FAILURE;
     }
 
-    if (mz_build_add_file(build, "notes.txt") != 0 ||
-        mz_build_add_file(build, "photo.png") != 0) {
-        fprintf(stderr, "Failed to add file to archive.\n");
-        mz_build_close(build);
+    /* Player Health */
+    uint64_t player_health = 100;
+
+    if (mz_memsave_add_data(
+            save,
+            "Player Health",
+            sizeof(player_health),
+            &player_health) != 0) {
+
+        fprintf(stderr, "Failed to add Player Health.\n");
+        mz_memsave_close(save);
         return EXIT_FAILURE;
     }
 
-    if (mz_build_write(build, "example.mz") != 0) {
-        fprintf(stderr, "Failed to write archive.\n");
-        mz_build_close(build);
+    /* Player Score */
+    uint64_t player_score = 5000;
+
+    if (mz_memsave_add_data(
+            save,
+            "Player Score",
+            sizeof(player_score),
+            &player_score) != 0) {
+
+        fprintf(stderr, "Failed to add Player Score.\n");
+        mz_memsave_close(save);
         return EXIT_FAILURE;
     }
 
-    mz_build_close(build);
+    /* Player Name */
+    const char *player_name = "Player1";
 
-    printf("Wrote example.mz\n");
+    if (mz_memsave_add_data(
+            save,
+            "Player Name",
+            strlen(player_name) + 1,
+            player_name) != 0) {
+
+        fprintf(stderr, "Failed to add Player Name.\n");
+        mz_memsave_close(save);
+        return EXIT_FAILURE;
+    }
+
+    /* Game Version */
+    const char *game_version = "1.0.0";
+
+    if (mz_memsave_add_data(
+            save,
+            "Game Version",
+            strlen(game_version) + 1,
+            game_version) != 0) {
+
+        fprintf(stderr, "Failed to add Game Version.\n");
+        mz_memsave_close(save);
+        return EXIT_FAILURE;
+    }
+
+    /* Write archive */
+    if (mz_memsave_write(save, "game.save") != 0) {
+        fprintf(stderr, "Failed to write memory archive.\n");
+        mz_memsave_close(save);
+        return EXIT_FAILURE;
+    }
+
+    mz_memsave_close(save);
+
+    printf("Wrote game.save\n");
+
     return EXIT_SUCCESS;
 }
 ```
+### Reading Game Data
+```c
+#include "libmz.h"
 
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(void)
+{
+	// Load the Saved Data File in Memory
+    MZ_ARCHIVE *game_data = mz_archive_open("game.save");
+	if (!game_data){
+		printf("Unable to load game data file\n");
+		return -1;
+	}
+	
+	// Data names of the data required
+	char *data_name1 = "Player Health";
+	char *data_name2 = "Player Score";
+	
+	// Getting content struct from name 
+	const MZ_CONTENT *player_health_data = mz_archive_content_by_name(game_data, data_name1);
+	if(!player_health_data){
+		printf("Player Health Data Not Found\n");
+		return -1;
+	}
+	
+	// Reading Player Health Data in buffer1
+	uint8_t buffer1[8] = {0};
+	if(mz_archive_read_content(game_data, player_health_data, buffer1, 8, 0) == -1){
+		printf("Unable to Read Player Health Data \n");
+		return -1;
+	}
+	
+	// Converting byte sequence to a uint64_t as Player Health Value
+	uint64_t health_value = 0;
+	memcpy(&health_value, buffer1, sizeof(health_value));
+	
+	// Printing Player Health Data
+	printf("%s : %lld\n", data_name1, health_value);
+	
+	// Getting content struct from name 
+	const MZ_CONTENT *player_score_data = mz_archive_content_by_name(game_data, data_name2);
+	if(!player_score_data){
+		printf("Player Score Data Not Found\n");
+		return -1;
+	}
+	
+	// Reading Player Score Data in buffer2
+	uint8_t buffer2[8] = {0};
+	if(mz_archive_read_content(game_data, player_score_data, buffer2, 8, 0) == -1){
+		printf("Unable to Read Player Score Data \n");
+		return -1;
+	}
+	
+	// Converting byte sequence to a uint64_t as Player Score Value
+	uint64_t score_value = 0;
+	memcpy(&score_value, buffer2, sizeof(score_value));
+	
+	// Printing Player Score Data
+	printf("%s : %lld\n", data_name2, score_value);
+
+    return 0;
+}
+```
 
 # Design Philosophy
 
@@ -180,6 +378,7 @@ MZ archives are designed to be:
 - Easy to parse
 - Portable
 - Simple to implement
+- Usable for Indie Projects
 
 The format does not use compression.
 
@@ -190,7 +389,7 @@ This makes MZ useful for situations where fast archive access is more important 
 
 Currently not supported:
 
-- Extracting files directly to disk (you can still read file contents into memory with `mz_archive_read_file`)
+- Extracting data directly to disk (you can still read file contents into memory with `mz_archive_read_content`)
 - Compression
 - Encryption
 - Modifying existing archives in place
@@ -243,8 +442,6 @@ Copyright (c) 2026 Moinak Debnath
 
 # Status
 
-🚧 Under Development
-
-The API is still evolving and may change before the first stable release.
+🚧 Development is Good Going
 
 Suggestions and contributions are welcome.
