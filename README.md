@@ -84,7 +84,7 @@ Currently supported:
 - Read data content
 - Access stored datanames
 - Get data sizes
-- Get data data offsets
+- Get data offsets
 - Search content by dataname
 - Access content by index
 - Build new archives in memory and write them to disk **This mode for writing data directly from memory**
