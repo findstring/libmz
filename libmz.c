@@ -60,28 +60,29 @@ struct MZ_CONTENT {
 struct MZ_ARCHIVE {
 	FILE *fp;
     uint64_t format_version;
-    uint64_t data_count;
     uint64_t creation_time;
 	uint64_t archive_size;
-    MZ_CONTENT  *data;
+    uint64_t content_count;
+    MZ_CONTENT  *content;
 };
 
 struct MZ_FILESAVE {
 	char header[2];
     uint64_t format_version;
-    uint64_t file_count;
     uint64_t creation_time;
+    uint64_t file_count;
     char  **files;
 };
 
+// This Struct can be said to be a Dictionary like in python
 struct MZ_MEMSAVE {
 	char header[2];
 	uint64_t format_version;
-	uint64_t data_count;
+	uint64_t data_count; // Works as Size of Dictionary
 	uint64_t creation_time;
-	uint64_t *data_sizes;
-	char **data_names;
-	void **data;
+	char **data_names; // Works as python dictionary keys()
+	uint64_t *data_sizes; // Sizes of each dataname value
+	void **data; // Works as python dictionary values()
 };
 
 // Using little endian format to write values as (uint64_t) into a file.
@@ -195,23 +196,23 @@ MZ_ARCHIVE *mz_archive_open(const char *file)
 	if (archive->format_version != LIBMZ_FORMAT_VERSION)
 		goto error;
 
-    if (mz_fread_u64(fp, &archive->data_count) != 0)
+    if (mz_fread_u64(fp, &archive->content_count) != 0)
 		goto error;
 	
-	if (archive->data_count >= LIBMZ_MAX_DATA_COUNT)
+	if (archive->content_count >= LIBMZ_MAX_DATA_COUNT)
 		goto error;
 	
-	if (archive->data_count > 0) {
-		archive->data = calloc(archive->data_count, sizeof(MZ_CONTENT));
-		if (!archive->data)
+	if (archive->content_count > 0) {
+		archive->content = calloc(archive->content_count, sizeof(MZ_CONTENT));
+		if (!archive->content)
 			goto error;
 	} else {
-		archive->data = NULL;
+		archive->content = NULL;
 	}
 
-    for (uint64_t i = 0; i < archive->data_count; i++) {
+    for (uint64_t i = 0; i < archive->content_count; i++) {
 
-        MZ_CONTENT *content = &archive->data[i];
+        MZ_CONTENT *content = &archive->content[i];
 
         if (mz_fread_u64(fp, &content->dataname_len) != 0)
             goto error;
@@ -259,11 +260,11 @@ MZ_ARCHIVE *mz_archive_open(const char *file)
 error:
 
     if (archive) {
-        if (archive->data) {
-            for (uint64_t i = 0; i < archive->data_count; i++)
-                free(archive->data[i].dataname);
+        if (archive->content) {
+            for (uint64_t i = 0; i < archive->content_count; i++)
+                free(archive->content[i].dataname);
 
-            free(archive->data);
+            free(archive->content);
         }
 
         if (archive->fp)
@@ -283,20 +284,20 @@ void mz_archive_close(MZ_ARCHIVE *mz)
     if (mz->fp)
         fclose(mz->fp);
 
-    if (mz->data) {
-        for (uint64_t i = 0; i < mz->data_count; i++) {
-            free(mz->data[i].dataname);
+    if (mz->content) {
+        for (uint64_t i = 0; i < mz->content_count; i++) {
+            free(mz->content[i].dataname);
         }
 
-        free(mz->data);
+        free(mz->content);
     }
 
     free(mz);
 }
 
-uint64_t mz_archive_data_count(const MZ_ARCHIVE *mz)
+uint64_t mz_archive_content_count(const MZ_ARCHIVE *mz)
 {
-    return mz ? mz->data_count : UINT64_MAX;
+    return mz ? mz->content_count : UINT64_MAX;
 }
 
 uint64_t mz_archive_format_version(const MZ_ARCHIVE *mz)
@@ -314,7 +315,7 @@ uint64_t mz_archive_archive_size(const MZ_ARCHIVE *mz)
     return mz ? mz->archive_size : UINT64_MAX;
 }
 
-uint64_t mz_archive_dataname_len_of(const MZ_CONTENT *content)
+uint64_t mz_content_dataname_len_of(const MZ_CONTENT *content)
 {
     if (!content)
         return UINT64_MAX;
@@ -322,7 +323,7 @@ uint64_t mz_archive_dataname_len_of(const MZ_CONTENT *content)
     return content->dataname_len;
 }
 
-const char *mz_archive_dataname_of(const MZ_CONTENT *content)
+const char *mz_content_dataname_of(const MZ_CONTENT *content)
 {
     if (!content)
         return NULL;
@@ -330,7 +331,7 @@ const char *mz_archive_dataname_of(const MZ_CONTENT *content)
     return content->dataname;
 }
 
-uint64_t mz_archive_content_size_of(const MZ_CONTENT *content)
+uint64_t mz_content_data_size_of(const MZ_CONTENT *content)
 {
     if (!content)
         return UINT64_MAX;
@@ -338,7 +339,7 @@ uint64_t mz_archive_content_size_of(const MZ_CONTENT *content)
     return content->data_size;
 }
 
-uint64_t mz_archive_data_offset_of(const MZ_CONTENT *content)
+uint64_t mz_content_data_offset_of(const MZ_CONTENT *content)
 {
     if (!content)
         return UINT64_MAX;
@@ -351,22 +352,22 @@ const MZ_CONTENT *mz_archive_content_by_name(const MZ_ARCHIVE *mz, const char *d
     if (!mz || !dataname)
         return NULL;
 
-    for (uint64_t i = 0; i < mz->data_count; ++i)
-        if (strcmp(mz->data[i].dataname, dataname) == 0)
-            return &mz->data[i];
+    for (uint64_t i = 0; i < mz->content_count; ++i)
+        if (strcmp(mz->content[i].dataname, dataname) == 0)
+            return &mz->content[i];
 
     return NULL;
 }
 
 const MZ_CONTENT *mz_archive_content_by_index(const MZ_ARCHIVE *mz, uint64_t index)
 {
-    if (!mz || index >= mz->data_count)
+    if (!mz || index >= mz->content_count)
         return NULL;
 
-    return &mz->data[index];
+    return &mz->content[index];
 }
 
-int mz_archive_read_content(const MZ_ARCHIVE *mz, const MZ_CONTENT *content, void *buffer, uint64_t size, uint64_t offset)
+int mz_archive_read_content_data(const MZ_ARCHIVE *mz, const MZ_CONTENT *content, void *buffer, uint64_t size, uint64_t offset)
 {
 	if(!mz || !content)
 		return -1;

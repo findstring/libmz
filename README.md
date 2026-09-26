@@ -17,12 +17,10 @@ The library allows programs to:
 - Write virtual archives into disk
 
 # Version
-v1.0.0
+v2.0.0
 
-# Changelog [0.1.0 -> 1.0.0]
-- Fully Changed API with more better and convinient function names.
-- New Memory-Save Mode is Introduced to save data directly from memory to a File.
-- More Bound Checks and Limits.
+# Changelog [1.0.0 -> 2.0.0]
+- Fully Changed API with more better and convinient function names for better understanding and relation.
 
 # MZ CLI 
 
@@ -154,7 +152,7 @@ int main(void)
 
     printf("Archive Information\n");
     printf("-------------------\n");
-    printf("Data: %" PRIu64 "\n", mz_archive_data_count(archive));
+    printf("Data: %" PRIu64 "\n", mz_archive_content_count(archive));
     printf("Format Version: %" PRIu64 "\n",
            mz_archive_format_version(archive));
     printf("Created: %" PRIu64 "\n\n",
@@ -171,9 +169,9 @@ int main(void)
 
     printf("First Content\n");
     printf("-------------\n");
-    printf("Name: %s\n", mz_archive_dataname_of(content));
+    printf("Name: %s\n", mz_content_dataname_of(content));
 
-    uint64_t size = mz_archive_content_size_of(content);
+    uint64_t size = mz_content_data_size_of(content);
 
     printf("Size: %" PRIu64 " bytes\n", size);
 
@@ -185,7 +183,7 @@ int main(void)
         return EXIT_FAILURE;
     }
 
-    if (mz_archive_read_content(
+    if (mz_archive_read_content_data(
             archive,
             content,
             buffer,
@@ -330,7 +328,7 @@ int main(void)
 	
 	// Reading Player Health Data in buffer1
 	uint8_t buffer1[8] = {0};
-	if(mz_archive_read_content(game_data, player_health_data, buffer1, 8, 0) == -1){
+	if(mz_archive_read_content_data(game_data, player_health_data, buffer1, 8, 0) == -1){
 		printf("Unable to Read Player Health Data \n");
 		return -1;
 	}
@@ -351,7 +349,7 @@ int main(void)
 	
 	// Reading Player Score Data in buffer2
 	uint8_t buffer2[8] = {0};
-	if(mz_archive_read_content(game_data, player_score_data, buffer2, 8, 0) == -1){
+	if(mz_archive_read_content_data(game_data, player_score_data, buffer2, 8, 0) == -1){
 		printf("Unable to Read Player Score Data \n");
 		return -1;
 	}
@@ -389,7 +387,7 @@ This makes MZ useful for situations where fast archive access is more important 
 
 Currently not supported:
 
-- Extracting data directly to disk (you can still read file contents into memory with `mz_archive_read_content`)
+- Extracting data directly to disk (you can still read file contents into memory with `mz_archive_read_content_data`)
 - Compression
 - Encryption
 - Modifying existing archives in place
